@@ -1,17 +1,29 @@
-# mNIC-CLI
+# mNIC-CLI(仮称)
 
-2つのNICを使ったTCP接続のラウンドロビン割り当てと、HTTP Range並列ダウンロードの効果を観察するための実験用HTTPプロキシです。
+## 概要
+本プロジェクトは、「ノートPCに2つのUSB外付けNICを搭載し、2つのNICへトラフィックを分散することで、PCの接続帯域を拡張し、冗長性を高めるツール」の開発を行う。
+本ツールは、クライアントPC上で動作するプロキシサーバーとして実装する。このサーバーはTCP接続要求を受けるたびに、速度に余裕の有りそうなNICを経由してコネクションを張り、通信を複数経路に分散させる。
+しかし、これだけでは、動画サイトのような通信量が多いホストへの通信が割り当てられた1つのNICに通信が集中してしまう。
+その対策として、接続要求の接続先(ホスト名)が動画サイトのような通信量が多いサイトの場合は、TLS終端によって通信内容を復号化する。
+その後、主要なCDNはAccept-Rangesヘッダに対応するため、Rangeリクエストを用いて両方のNICに通信を割り当てる。その後合体させる。
+これにより、通信量が多いホスト名のときのみトラフィックの分散を行うことで、TLS終端処理による遅延を最小化しつつ、通信の高速化と冗長化を実現できると考えている。
+
+## 今後実装予定
+
+- TLS終端
+- ホスト名ごとにコネクション数と通信量のログを取る。
+- Range-Acceptヘッダを使う
 
 ## セットアップ
 
-プロジェクトルートに`config.toml`を作成します。
+1. プロジェクトルートに`config.toml`を作成する。
+2. NICのIPアドレスを指定
+3. cargo runする
+4. ブラウザのHTTPプロキシを`127.0.0.1:8080`に設定
 
-```bash
-cp config.example.toml config.toml
-```
 
-その後、NICのIPアドレスを実環境に合わせて編集してください。
 
+### config.tomlの設定例
 ```toml
 [[nics]]
 ip = "192.168.1.10"
@@ -23,7 +35,6 @@ ip = "192.168.1.11"
 listen = "127.0.0.1:8080"
 ```
 
-2つのNICアドレスは、ローカルのLinuxホストに割り当てられているIPv4アドレスである必要があります。
 
 ## 起動
 
@@ -31,56 +42,51 @@ listen = "127.0.0.1:8080"
 cargo run
 ```
 
-Range分割GETを有効にする場合だけ、明示的に`--range-split`を指定します。
+現在、Range分割GETはデフォルトで無効。Range分割GETを有効にする場合は`--range-split`を指定する。現在はTLS終端ができないため、http通信のときのみ分割が可能。
 
 ```bash
 cargo run -- --range-split
 ```
 
-起動後、ブラウザのHTTPプロキシを`127.0.0.1:8080`に設定してください。
 
-デフォルトではRange分割GETは無効です。HTTP GET、HTTPS CONNECT、その他HTTPメソッドは、ブラウザからプロキシへ届いたTCP接続ごとにNIC 0、NIC 1、NIC 0...の順で割り当てられます。
+## ターミナル上の表示
 
-`--range-split`を指定した場合、HTTP GETではHEADリクエストで上流サーバの対応状況を確認します。上流サーバが`Accept-Ranges: bytes`に対応し、`Content-Length`が2バイト以上であれば、2つのNICを使って2つのRangeを並列取得し、結合した`200 OK`レスポンスをブラウザへ返します。
+```text
+mNIC-CLI live status
+Listen: 127.0.0.1:8080    Range split: OFF   Elapsed: 00:03:12
 
-HTTPSは中身を解析しません。CONNECTリクエストはTLS終端せず、割り当てられたNIC経由でそのままトンネルします。
+NIC throughput, last 10s average
+NIC  IP              TX/s        RX/s        Active  Opened  Failed
+[0]  192.168.1.10    12.40 KB/s  4.82 MB/s   2       18      0
+[1]  192.168.1.11    10.12 KB/s  4.77 MB/s   1       17      1
 
-## 表示
+NIC totals since start
+NIC  IP              TX total    RX total
+[0]  192.168.1.10    532.10 KB   245.80 MB
+[1]  192.168.1.11    498.20 KB   238.44 MB
 
-実行中は、ターミナル上の同じ画面を1秒ごとに更新します。
-
-- 直近10秒平均のNIC別TX/RX
-- 起動後累計のNIC別TX/RX
-- アクティブな接続
-- 直近イベント
-
-ここで表示するTX/RXは、このプロキシが扱ったpayload量です。TCP/IPヘッダ、Ethernetヘッダ、TLSレコードヘッダ、再送分などは含みません。
-
-## 経路確認
-
-送信元IPを固定しても、実際にどの物理NICから出るかはLinuxのルーティング設定に依存します。実験前に対象サーバへの経路を確認してください。
-
-```bash
-
-ip route get 192.168.24.1 from 192.168.24.17
-ip route get 192.168.24.1 from 192.168.24.21
-
+Active connections
+ID    NIC  Kind      Target                              Age TX        RX State
+(none)
+Recent events
+(none)
 ```
 
-期待する状態は、それぞれ別の`dev <interface>`が表示されることです。
 
 
- 一時的に直すなら、送信元IPごとのpolicy routingを入れます。
+## ルーティングテーブルの設定
 
-  sudo ip route add 192.168.24.0/24 dev enxe04f43987bfc src 192.168.24.21 table 121
-  sudo ip route add default via 192.168.24.1 dev enxe04f43987bfc src 192.168.24.21 table 121
-  sudo ip rule add from 192.168.24.21/32 table 121 priority 121
+送信元IPを固定しても、実際にどの物理NICから出るかはLinuxのルーティング設定に依存する。ルーティングテーブルを確認する必要がある。
 
-  sudo ip route add 192.168.24.0/24 dev enx7cc2c63ef2e8 src 192.168.24.17 table 117
-  sudo ip route add default via 192.168.24.1 dev enx7cc2c63ef2e8 src 192.168.24.17 table 117
-  sudo ip rule add from 192.168.24.17/32 table 117 priority 117
+### 使用NICの確認
+```bash
+ip route get 192.168.24.1 from 192.168.24.10
+ip route get 192.168.24.1 from 192.168.24.11
+```
 
-  その後確認:
-
-  ip route get 192.168.24.2 from 192.168.24.21
-  ip route get 192.168.24.2 from 192.168.24.17
+### ルーティングの変更
+```bash
+  sudo ip route add 192.168.10.0/24 dev enxe04f43987bfc src 192.168.24.10 table 121
+  sudo ip route add default via 192.168.24.1 dev enxe04f43987bfc src 192.168.24.10 table 121
+  sudo ip rule add from 192.168.24.10/32 table 121 priority 121
+```
