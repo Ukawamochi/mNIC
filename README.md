@@ -68,3 +68,19 @@ ip route get 192.168.24.1 from 192.168.24.21
 ```
 
 期待する状態は、それぞれ別の`dev <interface>`が表示されることです。
+
+
+ 一時的に直すなら、送信元IPごとのpolicy routingを入れます。
+
+  sudo ip route add 192.168.24.0/24 dev enxe04f43987bfc src 192.168.24.21 table 121
+  sudo ip route add default via 192.168.24.1 dev enxe04f43987bfc src 192.168.24.21 table 121
+  sudo ip rule add from 192.168.24.21/32 table 121 priority 121
+
+  sudo ip route add 192.168.24.0/24 dev enx7cc2c63ef2e8 src 192.168.24.17 table 117
+  sudo ip route add default via 192.168.24.1 dev enx7cc2c63ef2e8 src 192.168.24.17 table 117
+  sudo ip rule add from 192.168.24.17/32 table 117 priority 117
+
+  その後確認:
+
+  ip route get 192.168.24.2 from 192.168.24.21
+  ip route get 192.168.24.2 from 192.168.24.17
