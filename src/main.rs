@@ -14,6 +14,6 @@ use anyhow::Result;
 #[tokio::main]
 async fn main() -> Result<()> {
     let options = cli::parse_args(std::env::args().skip(1))?;
-    let config = config::load_config(Path::new("config.toml"))?;
+    let config = config::load_config(Path::new("config.toml"))?;//Pathを引数に渡す
     proxy::run(config, options).await
 }

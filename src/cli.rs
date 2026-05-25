@@ -1,6 +1,9 @@
+//コマンドライン引数の処理を行うファイル
 use anyhow::{Result, bail};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+//Eq:
+// PartialEq:
 pub struct RuntimeOptions {
     pub range_split_enabled: bool,
 }
@@ -12,16 +15,16 @@ impl Default for RuntimeOptions {
         }
     }
 }
-
+//<I, S>はジェネリティクス: 後で型を決める
 pub fn parse_args<I, S>(args: I) -> Result<RuntimeOptions>
-where
-    I: IntoIterator<Item = S>,
-    S: AsRef<str>,
+where//ジェネリティクスの型に制約をつける
+    I: IntoIterator<Item = S>,//iteratorに変換できる型,Itemはイテレータを一回回したら出てくる要素の型
+    S: AsRef<str>,//&strとして参照できる型
 {
     let mut options = RuntimeOptions::default();
 
     for arg in args {
-        match arg.as_ref() {
+        match arg.as_ref() {//as_ref()はAsRef<T>で定義したTに変換して返す
             "--range-split" => options.range_split_enabled = true,
             "--no-range-split" => options.range_split_enabled = false,
             "--help" | "-h" => bail!(
@@ -31,9 +34,9 @@ where
             unknown => bail!("unknown argument: {unknown}"),
         }
     }
-
     Ok(options)
 }
+
 
 #[cfg(test)]
 mod tests {

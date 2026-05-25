@@ -1,21 +1,28 @@
 use std::{
-    convert::Infallible,
-    net::SocketAddr,
+    convert::Infallible,//絶対エラーが起こらないことを示す型
+    net::SocketAddr,//x.x.x.x:xxxxみたいなIPアドレスの型
     sync::{
-        Arc,
-        atomic::{AtomicU64, AtomicUsize, Ordering},
+        Arc,//一つの変数に複数の所有者で共有するためのポインタ
+        //同時に同じ所に書き込まないように、読む→上書きを分割できないセット操作にする
+        atomic::{
+            AtomicU64,//AtomicU64型を追加
+            AtomicUsize,//AtomicUsize型を追加
+            Ordering,//実行の順序をどれくらい固定するか
+        },
     },
 };
-
+//エラー型をanyhow::Errorに統一し、Contextで発生箇所などの説明を付け足す。
 use anyhow::{Context, Result};
+
 use hyper::server::conn::http1;
 use hyper::service::service_fn;
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::TokioIo;//tokioのTCPStreamをHyperが扱えるように変換する
 use tokio::net::TcpListener;
 
+//crate内のモジュール
 use crate::{cli::RuntimeOptions, config::Config, handler, http, output, stats::SharedStats};
 
-#[derive(Clone)]
+#[derive(Clone)]//自分で作ったStructの型にCloneを実装する
 pub struct ProxyState {
     pub config: Arc<Config>,
     pub clients: Arc<Vec<reqwest::Client>>,
@@ -26,7 +33,7 @@ pub struct ProxyState {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct ConnectionContext {
+pub struct ConnectionContext {//値が全てスタックに収まる型なので、Copyを実装する。
     pub id: u64,
     pub nic_index: usize,
     pub peer: SocketAddr,
@@ -34,8 +41,8 @@ pub struct ConnectionContext {
 
 impl ProxyState {
     fn next_connection(&self, peer: SocketAddr) -> ConnectionContext {
-        let id = self.next_connection_id.fetch_add(1, Ordering::Relaxed);
-        let nic_index = self.next_nic_index.fetch_add(1, Ordering::Relaxed) % 2;
+        let id = self.next_connection_id.fetch_add(1, Ordering::Relaxed);//connection_idを1増やす
+        let nic_index = self.next_nic_index.fetch_add(1, Ordering::Relaxed) % 2;//NICを切り替える
         self.stats.record_inbound(id, peer, nic_index);
         ConnectionContext {
             id,
@@ -44,35 +51,42 @@ impl ProxyState {
         }
     }
 }
-
+//config: コマンドライン引数から作ったoptions構造体を渡す(cli.rs)
+// options: config.tomlの内容をtomlとしてパースしたもの(config.rs)
 pub async fn run(config: Config, options: RuntimeOptions) -> Result<()> {
+    //NICごとにHttpClientsを作成
     let clients = config
         .nics
         .iter()
         .map(|nic| http::client_for(nic.ip))
         .collect::<Result<Vec<_>>>()?;
+    //プロキシのListenするソケットを作成。
     let listener = TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("failed to bind proxy listener: {}", config.proxy.listen))?;
-    let stats = SharedStats::new(&config, options);
+    let stats = SharedStats::new(&config, options);//統計情報//STATS.rsを参照
     let state = ProxyState {
-        config: Arc::new(config),
-        clients: Arc::new(clients),
+        config: Arc::new(config),//NICのIP、Listen中のアドレスとソケット
+        clients: Arc::new(clients),//上流
         options,
-        stats: stats.clone(),
-        next_nic_index: Arc::new(AtomicUsize::new(0)),
-        next_connection_id: Arc::new(AtomicU64::new(1)),
+        stats: stats.clone(),//統計情報を共有
+        next_nic_index: Arc::new(AtomicUsize::new(0)),//使用NICを決定
+        next_connection_id: Arc::new(AtomicU64::new(1)),//TCP接続一本ごとにconnection_idを割り当て
     };
-    output::spawn_live_renderer(stats);
+    //統計情報をターミナルに表示する処理を別スレッドで実行する
+    output::spawn_live_renderer(stats);//OUTPUT.rsを参照
 
     loop {
+        //Listenerにブラウザからの接続が来るのを待つ。
+        // stream:ブラウザとプロキシ間のTCP接続,peer:ブラウザのIPとポート番号
         let (stream, peer) = listener
             .accept()
             .await
             .context("failed to accept connection")?;
-        let connection = state.next_connection(peer);
-        let state = state.clone();
+        let connection = state.next_connection(peer);//NICを切り替え、connection_idを1増やしたものを割り当てる。
+        let state = state.clone();//ArcでCloneするのでstateを所有権ごと渡せる
 
+        //非同期でそのTCPコネクションの通信を処理する。
         tokio::spawn(async move {
             let io = TokioIo::new(stream);
             let service_state = state.clone();
@@ -96,7 +110,7 @@ pub async fn run(config: Config, options: RuntimeOptions) -> Result<()> {
         });
     }
 }
-
+//testのときだけコンパイルをする。runのときはバイナリに含まない。
 #[cfg(test)]
 mod tests {
     use std::net::{Ipv4Addr, SocketAddr};
