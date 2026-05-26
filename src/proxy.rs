@@ -87,25 +87,31 @@ pub async fn run(config: Config, options: RuntimeOptions) -> Result<()> {
         let state = state.clone();//ArcでCloneするのでstateを所有権ごと渡せる
 
         //非同期でそのTCPコネクションの通信を処理する。
+        // async moveはstream,connection,stateをmoveしている。(以下のループは寿命が不明だから所有権ごと渡す)
         tokio::spawn(async move {
-            let io = TokioIo::new(stream);
-            let service_state = state.clone();
+            let io = TokioIo::new(stream);//streamはtokioの機能、hyperに対応させるためにTokioIOを使う。
+            let service_state = state.clone();//stateをCloneする
+            
             let service = service_fn(move |req| {
                 let state = service_state.clone();
                 let connection = connection;
+                //handler::routeはエラーもレスポンスに含めるのでエラーは発生しない。
+                //ターボフィッシュの構文:Ok::<成功側の型(_なので推論), エラー側の型(今回はエラーが起こらない)>(値)
+                // 通信に失敗してもStatusコードをhttpでブラウザに送る。Rustではエラーを処理しない
                 async move { Ok::<_, Infallible>(handler::route(req, state, connection).await) }
             });
-
+            //エラー発生時にはエラーを統計情報に記録。
             if let Err(error) = http1::Builder::new()
                 .serve_connection(io, service)
                 .with_upgrades()
                 .await
             {
-                state.stats.record_event(format!(
+                state.stats.record_event(format!(//format!は値を埋め込んだStringに加工するマクロ
                     "connection #{} from {} failed: {}",
                     connection.id, connection.peer, error
                 ));
             }
+            //統計情報を更新する
             state.stats.finish_pending_tcp(connection.id);
         });
     }

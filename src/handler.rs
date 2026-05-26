@@ -1,22 +1,30 @@
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
-    time::Duration,
+    time::Duration,//時間を扱う(時計ではなく、Nmsみたいな)
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use bytes::{Bytes, BytesMut};
-use http_body_util::{BodyExt, Full};
-use hyper::{
-    Method, Request, Response, StatusCode, Uri, body::Incoming, header::CONTENT_TYPE, upgrade,
+use bytes::{Bytes, BytesMut};//Bytesは読み取り専用のバイト列、BytesMutは書き換え可能
+use http_body_util::{BodyExt, Full};//httpのBodyを扱う。BodyExtはメゾットを追加する
+use hyper::{//hyperはTCPで受け取ったバイト列をhttpに対応したstructに変換する
+    Method,//HTTPメゾットの型
+    Request,//HTTPリクエストの要素(メゾット、URL、ヘッダなど)の型
+    Response,//HTTPレスポンスの要素(Status,ヘッダ、ボディなど)の型
+    StatusCode,//HTTPステータスコードの型
+    Uri,//リクエスト先のURIを扱う型
+    body::Incoming,//不完全なボディの型。すべて集まるとFullになる
+    header::CONTENT_TYPE,//httpヘッダを表す型
+    upgrade,//プロキシがパケットを解析せず中継だけする
 };
-use hyper_util::rt::TokioIo;
+use hyper_util::rt::TokioIo;//tokioとhyperの接続
 use reqwest::Method as ReqwestMethod;
 use tokio::{
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{TcpSocket, lookup_host},
-    time::timeout,
+    net::{TcpSocket, lookup_host},//
+    time::timeout,//非同期処理に時間制限をつける。これにDurationで作った時間量を入れる
 };
 
+//crateは自プロジェクト
 use crate::{
     chunk,
     config::NicConfig,
@@ -29,6 +37,7 @@ type RespBody = Full<Bytes>;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
+//ルーティング(GET、CONNECT,その他の3つで)
 pub async fn route(
     req: Request<Incoming>,
     state: ProxyState,
@@ -42,7 +51,7 @@ pub async fn route(
         handle_passthrough(req, state, connection).await
     }
 }
-
+//httpsのGETのとき(range_get()とfull_get()はこの関数が呼び出す)
 async fn handle_get(
     req: Request<Incoming>,
     state: ProxyState,
@@ -182,7 +191,7 @@ async fn handle_range_get(
             return error_response(StatusCode::BAD_GATEWAY, &error);
         }
     };
-
+    //不完全だったBodyを結合する
     let mut body = BytesMut::with_capacity(size as usize);
     body.extend_from_slice(&first.bytes);
     body.extend_from_slice(&second.bytes);
@@ -251,6 +260,7 @@ async fn handle_full_get(
     }
 }
 
+//CONNECT
 async fn handle_connect(
     req: Request<Incoming>,
     state: ProxyState,
@@ -311,6 +321,7 @@ async fn handle_connect(
         .unwrap_or_else(|_| Response::new(Full::new(Bytes::new())))
 }
 
+//CONNECTとGET以外
 async fn handle_passthrough(
     req: Request<Incoming>,
     state: ProxyState,
@@ -388,6 +399,7 @@ async fn handle_passthrough(
     }
 }
 
+//中継する
 async fn relay_tunnel(
     browser: TokioIo<hyper::upgrade::Upgraded>,
     server: tokio::net::TcpStream,
